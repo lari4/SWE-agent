@@ -295,3 +295,231 @@ This pipeline makes multiple attempts and uses an LLM reviewer to score each att
 **Final Output:**
 - Best attempt (highest score above threshold)
 
+### 2.2 Chooser-Based Retry Loop Pipeline
+
+This pipeline makes multiple attempts and uses an LLM chooser to directly select the best attempt by comparison.
+
+#### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│            CHOOSER RETRY LOOP INITIALIZATION                    │
+├─────────────────────────────────────────────────────────────────┤
+│  Configuration:                                                 │
+│  ├─ max_attempts: Maximum number of attempts                    │
+│  ├─ cost_limit: Maximum total cost                              │
+│  ├─ chooser_config: Chooser LLM configuration                   │
+│  └─ preselector_config (optional): Pre-filter configuration     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Run Multiple Attempts                  │
+        │  (Same as Score-Based Loop)             │
+        │  └─ Collect all submissions             │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   SELECTION PHASE                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Filter by Exit Status:                 │
+        │  ├─ If 2+ submitted, use only submitted │
+        │  └─ Else, use all attempts              │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Check: Need Preselector?               │
+        │  └─ Yes if >2 submissions               │
+        └─────────────────────────────────────────┘
+                              │
+                    ┌─────────┴──────────┐
+                    │                    │
+                  YES: >2               NO: ≤2
+                    │                    │
+                    ▼                    │
+    ┌───────────────────────────────┐   │
+    │   PRESELECTOR.CHOOSE()        │   │
+    ├───────────────────────────────┤   │
+    │  1. Format messages:          │   │
+    │     ├─ System template        │   │
+    │     └─ Instance template      │   │
+    │         └─ List of N          │   │
+    │            submissions         │   │
+    │  2. Query preselector LLM     │   │
+    │  3. Parse indices from        │   │
+    │     response                  │   │
+    │  4. Return chosen indices     │   │
+    │     (e.g., [0, 2, 5])         │   │
+    └───────────────────────────────┘   │
+                    │                    │
+                    └─────────┬──────────┘
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │          CHOOSER.CHOOSE()               │
+        ├─────────────────────────────────────────┤
+        │  1. Format messages for each submission:│
+        │     ├─ System template                  │
+        │     └─ Instance template with:          │
+        │         ├─ problem_statement            │
+        │         └─ formatted submissions list   │
+        │  2. Query chooser LLM                   │
+        │  3. Extract chosen index from response  │
+        │     (parse last number)                 │
+        │  4. Return ChooserOutput:               │
+        │     ├─ chosen_idx                       │
+        │     ├─ response                         │
+        │     └─ preselector_output (if used)     │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return Best Submission:                │
+        │  └─ submission[chosen_idx]              │
+        └─────────────────────────────────────────┘
+```
+
+#### Data Flow
+
+**Inputs:**
+- All attempted submissions
+- Chooser configuration
+
+**Data Passed to Chooser:**
+- `{{problem_statement}}`: Original issue
+- `{{submissions}}`: List of formatted submissions, each containing:
+  - `{{submission}}`: Git patch
+  - `{{diff}}`: Git diff
+  - Other info fields
+
+**Chooser Output:**
+- Index of chosen submission
+- Reasoning text
+
+**Final Output:**
+- Chosen submission
+
+---
+
+## Action Sampling Pipelines
+
+Action sampling strategies control how the agent generates and selects actions at each step.
+
+### 3.1 Standard Action Pipeline (No Sampling)
+
+Default behavior: Agent generates single action per step.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    FORWARD_WITH_HANDLING()                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Apply History Processors:              │
+        │  └─ Filter/transform message history    │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  MODEL.QUERY(messages)                  │
+        │  └─ Get single completion               │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  PARSER.PARSE(completion)               │
+        │  ├─ Extract thought                     │
+        │  └─ Extract action                      │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  TOOLS.EXECUTE(action)                  │
+        │  └─ Get observation                     │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return StepOutput:                     │
+        │  ├─ thought                             │
+        │  ├─ action                              │
+        │  ├─ observation                         │
+        │  ├─ exit_status                         │
+        │  └─ submission (if submitted)           │
+        └─────────────────────────────────────────┘
+```
+
+### 3.2 Ask Colleagues Pipeline
+
+Samples multiple actions and creates a "colleague discussion" to synthesize them.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              ASK_COLLEAGUES.GET_ACTION()                        │
+├─────────────────────────────────────────────────────────────────┤
+│  Configuration:                                                 │
+│  └─ n_samples: Number of colleague opinions (default: 2)        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  MODEL.QUERY(messages, n=n_samples)     │
+        │  └─ Get N completions in parallel       │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Parse Each Completion:                 │
+        │  for i, completion in completions:      │
+        │     ├─ Extract thought_i                │
+        │     └─ Extract action_i                 │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Format Colleague Discussion:           │
+        │  "Your colleagues had the following     │
+        │   ideas:                                │
+        │                                         │
+        │   Thought (colleague 0): {thought_0}    │
+        │   Proposed Action (colleague 0):        │
+        │   {action_0}                            │
+        │                                         │
+        │   Thought (colleague 1): {thought_1}    │
+        │   Proposed Action (colleague 1):        │
+        │   {action_1}                            │
+        │                                         │
+        │   Please summarize and compare...       │
+        │   choose one action..."                 │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Add Discussion to History:             │
+        │  └─ User message with colleague ideas   │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  MODEL.QUERY(history + discussion)      │
+        │  └─ Agent synthesizes and chooses       │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return Final Action                    │
+        └─────────────────────────────────────────┘
+```
+
+**Data Flow:**
+- Input: Current conversation history
+- Step 1: Generate N candidate thought-action pairs
+- Step 2: Format as colleague discussion prompt
+- Step 3: Agent synthesizes and selects best action
+- Output: Final thought-action pair
+
