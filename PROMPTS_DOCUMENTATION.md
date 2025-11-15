@@ -368,3 +368,192 @@ We'll automatically save your work and have maintainers evaluate it.
 </instructions>
 ```
 
+---
+
+## Observation & Feedback Prompts
+
+These prompts format the system's feedback to the agent after command execution, including command output, error messages, and contextual information.
+
+### 3.1 Default Next Step Template
+
+**Location:** `config/default.yaml`
+
+**Purpose:** Simple template that presents command output to the agent after each action.
+
+**Usage Context:** Used in default configuration to show observation without additional context.
+
+**Prompt:**
+```
+OBSERVATION:
+{{observation}}
+```
+
+### 3.2 Default No Output Template
+
+**Location:** `config/default.yaml`
+
+**Purpose:** Informs the agent when a command executes successfully but produces no output.
+
+**Usage Context:** Used to distinguish between empty output and command failure.
+
+**Prompt:**
+```
+Your command ran successfully and did not produce any output.
+```
+
+### 3.3 Coding Challenge Next Step Template
+
+**Location:** `config/coding_challenge.yaml`
+
+**Purpose:** Shows command output along with current file and directory context for coding challenges.
+
+**Usage Context:** Used with windowed file editor to help agent track which file is open and current working directory.
+
+**Key Features:**
+- Displays observation output
+- Shows currently open file
+- Shows current working directory
+- Shell prompt format
+
+**Prompt:**
+```
+{{observation}}
+(Open file: {{open_file}})
+(Current directory: {{working_dir}})
+bash-$
+```
+
+### 3.4 Coding Challenge No Output Template
+
+**Location:** `config/coding_challenge.yaml`
+
+**Purpose:** No output message with file and directory context.
+
+**Prompt:**
+```
+Your command ran successfully and did not produce any output.
+(Open file: {{open_file}})
+(Current directory: {{working_dir}})
+bash-$
+```
+
+### 3.5 Bash-Only Observation Template
+
+**Location:** `config/bash_only.yaml`
+
+**Purpose:** XML-formatted observation for bash-only mode.
+
+**Usage Context:** Uses XML tags for clear structure in minimal configurations.
+
+**Prompt:**
+```
+<observation>
+{{observation}}
+</observation>
+```
+
+### 3.6 Bash-Only No Output Template
+
+**Location:** `config/bash_only.yaml`
+
+**Purpose:** Warning-formatted message when command produces no output.
+
+**Prompt:**
+```
+<warning>
+Your last command ran successfully and did not produce any output.
+</warning>
+```
+
+### 3.7 Truncated Observation Template (Default)
+
+**Location:** `sweagent/agent/agents.py` (TemplateConfig class)
+
+**Purpose:** Warns the agent when command output exceeds the maximum observation length and has been truncated.
+
+**Usage Context:** Automatically used when observation exceeds `max_observation_length` (default: 100,000 characters).
+
+**Key Features:**
+- Shows truncated observation
+- Provides character count of elided content
+- Suggests alternative commands (head/tail/grep/redirect)
+- Warns against interactive pagers
+
+**Prompt:**
+```
+Observation: {{observation[:max_observation_length]}}<response clipped>
+<NOTE>Observations should not exceeded {{max_observation_length}} characters. {{elided_chars}} characters were elided. Please try a different command that produces less output or use head/tail/grep/redirect the output to a file. Do not use interactive pagers.</NOTE>
+```
+
+### 3.8 Truncated Observation Template (Bash-Only)
+
+**Location:** `config/bash_only.yaml`
+
+**Purpose:** More sophisticated truncation handling that shows both head and tail of output.
+
+**Usage Context:** Bash-only mode with 10,000 character limit.
+
+**Key Features:**
+- Shows first half of observation
+- Shows character count of elided middle section
+- Shows last half of observation
+- Provides specific command suggestions
+
+**Prompt:**
+```
+<warning>
+The output of your last command was too long.
+Please try a different command that produces less output.
+If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+</warning>
+
+<observation_head>
+{{observation[ : max_observation_length // 2]}}
+</observation_head>
+
+<elided_chars>
+{{elided_chars}} characters elided
+</elided_chars>
+
+<observation_tail>
+{{observation[- max_observation_length // 2:]}}
+</observation_tail>
+```
+
+### 3.9 Command Timeout Template
+
+**Location:** `config/bash_only.yaml`
+
+**Purpose:** Informs the agent when a command is cancelled due to timeout.
+
+**Usage Context:** Commands that exceed execution timeout (default: 60 seconds in bash_only.yaml).
+
+**Prompt:**
+```
+<warning>
+The command '{{command}}' was cancelled because it took more than {{timeout}} seconds to complete.
+It may have been waiting for user input or otherwise blocked.
+Please try a different command.
+</warning>
+```
+
+### 3.10 Demonstration Template
+
+**Location:** `config/coding_challenge.yaml`
+
+**Purpose:** Introduces example demonstrations to show the agent how to use the interface correctly.
+
+**Usage Context:** Shown at the beginning when demonstration trajectories are included in the configuration.
+
+**Prompt:**
+```
+Here is a demonstration of how to correctly accomplish this task.
+It is included to show you how to correctly use the interface.
+You do not need to follow exactly what is done in the demonstration.
+--- DEMONSTRATION ---
+{{demonstration}}
+--- END OF DEMONSTRATION ---
+```
+
