@@ -680,3 +680,171 @@ submit
 ```
 **Description:** submits the current file
 
+---
+
+## Review & Retry Loop Prompts
+
+These prompts are used in the review and retry loop system, which allows the agent to make multiple attempts at solving a problem and selecting the best solution.
+
+### 5.1 Submit Review Messages
+
+**Location:** `config/default.yaml` (registry_variables → SUBMIT_REVIEW_MESSAGES)
+
+**Purpose:** Multi-stage submission validation messages that guide the agent to review their changes before final submission.
+
+**Usage Context:** Shown after the agent runs the `submit` command to ensure quality control.
+
+**Key Features:**
+- Requests re-running reproduction script
+- Asks to remove temporary scripts
+- Warns about reverting test file modifications
+- Shows git diff of all changes
+
+**Prompt:**
+```
+Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.
+
+1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.
+  If the reproduction script is failing, please revisit your changes and make sure they are correct.
+  If you have already removed your reproduction script, please ignore this step.
+2. Remove your reproduction script (if you haven't done so already).
+3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.
+  You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.
+4. Run the submit command again to confirm.
+
+Here is a list of all of your changes:
+
+<diff>
+{{diff}}
+</diff>
+```
+
+### 5.2 Colleague Discussion Prompts (Ask Colleagues Sampler)
+
+**Location:** `sweagent/agent/action_sampler.py` (AskColleagues class)
+
+**Purpose:** Creates a collaborative discussion between multiple AI "colleagues" to select the best action.
+
+**Usage Context:** Used when action_sampler is configured with type "ask_colleagues". The agent samples multiple actions and synthesizes them.
+
+**How it works:**
+1. Model generates N sample actions
+2. System formats them as colleague suggestions
+3. Agent compares and selects best action
+
+**Prompt:**
+```
+Your colleagues had the following ideas:
+
+Thought (colleague 0): {thought_0}
+Proposed Action (colleague 0): {action_0}
+
+Thought (colleague 1): {thought_1}
+Proposed Action (colleague 1): {action_1}
+
+Please summarize and compare the ideas and propose and action to take. Finally choose one action to perform and explain it in detail and include it as a tool call. <important>You must include a thought and action (as a tool/function call). Do not try to invoke commands with triple backticks, use function calls instead.</important>
+```
+
+### 5.3 Binary Trajectory Comparison Prompts
+
+**Location:** `sweagent/agent/action_sampler.py` (BinaryTrajectoryComparisonConfig class)
+
+**Purpose:** Expert overseer system that compares two proposed actions and selects the better one through tournament-style elimination.
+
+**Usage Context:** Advanced action sampling that uses pairwise comparisons to find the best action among multiple candidates.
+
+#### System Template
+```
+<setting>You are an expert software engineer overseeing junior developers. They suggest actions to take to solve a problem. You must choose the best action to take. </setting>
+```
+
+#### Instance Template
+```
+We're solving the following problem
+
+<problem_statement>
+{{problem_statement}}
+</problem_statement>
+
+So far, we've performed the following actions:
+
+<trajectory>
+{{traj}}
+</trajectory>
+```
+
+#### Comparison Template
+```
+Two junior developers suggested the following actions:
+
+<thought1>
+{{thought1}}
+</thought1>
+
+<action1>
+{{action1}}
+</action1>
+
+<thought2>
+{{thought2}}
+</thought2>
+
+<action2>
+{{action2}}
+</action2>
+
+Please compare the two actions in detail.
+
+Which action should we take?
+
+If you think the first action is better, respond with "first".
+If you think the second action is better, respond with "second".
+
+The last line of your response MUST be "first" or "second".
+```
+
+### 5.4 Reviewer System Prompts
+
+**Location:** `sweagent/agent/reviewer.py` (ReviewerConfig)
+
+**Purpose:** Evaluates completed solutions and assigns quality scores to help select the best attempt.
+
+**Usage Context:** Used in score-based retry loops where the agent makes multiple attempts and the reviewer scores each attempt.
+
+**Key Features:**
+- Scores submissions on a configurable range
+- Can apply penalties for non-submitted solutions
+- Supports multiple samples for robust scoring
+- Uses trajectory formatting to show agent's work
+
+**Template Structure:**
+- `system_template`: Defines the reviewer's role
+- `instance_template`: Provides problem statement and solution trajectory
+- Score is extracted from the last number in the response
+
+### 5.5 Chooser System Prompts
+
+**Location:** `sweagent/agent/reviewer.py` (ChooserConfig)
+
+**Purpose:** Selects the best solution from multiple attempts without scoring, using direct comparison.
+
+**Usage Context:** Alternative to score-based review, directly chooses which submission is best.
+
+**Template Structure:**
+- `system_template`: Defines the chooser's role
+- `instance_template`: Provides problem statement
+- `submission_template`: Formats each submission for comparison
+- Extracts chosen index from the last number in response
+
+### 5.6 Preselector System Prompts
+
+**Location:** `sweagent/agent/reviewer.py` (PreselectorConfig)
+
+**Purpose:** Pre-filters submissions before final selection to reduce the candidate pool.
+
+**Usage Context:** Used as a first-pass filter when there are many submissions (>2), selecting promising candidates for final review.
+
+**Template Structure:**
+- Similar to Chooser but returns multiple indices
+- Used before Chooser to narrow down options
+
