@@ -148,3 +148,150 @@ This is the core pipeline that executes when you run the agent on a problem inst
 - `{{open_file}}`: Currently open file (if using windowed editor)
 - `{{observation}}`: Output from previous command
 
+---
+
+## Retry Loop Pipelines
+
+Retry loops allow the agent to make multiple attempts at solving a problem, with different strategies for selecting the best solution.
+
+### 2.1 Score-Based Retry Loop Pipeline
+
+This pipeline makes multiple attempts and uses an LLM reviewer to score each attempt, selecting the best one.
+
+#### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              SCORE RETRY LOOP INITIALIZATION                    │
+├─────────────────────────────────────────────────────────────────┤
+│  Configuration:                                                 │
+│  ├─ max_attempts: Maximum number of attempts                    │
+│  ├─ accept_score: Score threshold for accepting solution        │
+│  ├─ max_accepts: Stop after N accepted solutions                │
+│  ├─ cost_limit: Maximum total cost for all attempts+reviews     │
+│  └─ reviewer_config: Reviewer LLM configuration                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    ATTEMPT LOOP                                 │
+│         for i in range(max_attempts):                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Check Budget:                          │
+        │  ├─ Total cost < cost_limit?            │
+        │  └─ Enough budget for new attempt?      │
+        └─────────────────────────────────────────┘
+                              │
+                    ┌─────────┴──────────┐
+                    │                    │
+                   NO                   YES
+                    │                    │
+                    ▼                    ▼
+            ┌──────────────┐    ┌──────────────────┐
+            │  STOP RETRY  │    │  START ATTEMPT i │
+            └──────────────┘    └──────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────┐
+                    │  Reset Agent:                       │
+                    │  ├─ Clear history                   │
+                    │  ├─ Clear trajectory                │
+                    │  ├─ Re-add system message           │
+                    │  ├─ Re-add demonstrations           │
+                    │  └─ Re-add instance message         │
+                    └─────────────────────────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────┐
+                    │  Run Agent Until Submission         │
+                    │  (Main Execution Loop)              │
+                    └─────────────────────────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────┐
+                    │  REVIEW SUBMISSION                  │
+                    └─────────────────────────────────────┘
+                                         │
+                                         ▼
+        ┌─────────────────────────────────────────────────────────┐
+        │           REVIEWER.REVIEW()                             │
+        ├─────────────────────────────────────────────────────────┤
+        │  1. Check exit_status:                                  │
+        │     └─ If not "submitted", apply failure penalty        │
+        │  2. Format reviewer messages:                           │
+        │     ├─ System: reviewer_config.system_template          │
+        │     └─ User: reviewer_config.instance_template          │
+        │         ├─ Input: problem_statement                     │
+        │         ├─ Input: trajectory (formatted)                │
+        │         └─ Input: submission (patch)                    │
+        │  3. Query reviewer LLM (n_sample times)                 │
+        │  4. Extract scores from responses:                      │
+        │     └─ Parse last number from each response             │
+        │  5. Calculate final score:                              │
+        │     ├─ Average of all samples                           │
+        │     ├─ Subtract failure penalty (if not submitted)      │
+        │     └─ Subtract std * reduce_by_std (if configured)     │
+        │  6. Return ReviewerResult:                              │
+        │     ├─ accept (score)                                   │
+        │     ├─ outputs (reviewer responses)                     │
+        │     └─ messages (reviewer conversation)                 │
+        └─────────────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────┐
+                    │  Store Submission:                  │
+                    │  ├─ trajectory                      │
+                    │  ├─ info                            │
+                    │  ├─ model_stats                     │
+                    │  └─ review_score                    │
+                    └─────────────────────────────────────┘
+                                         │
+                                         ▼
+                    ┌─────────────────────────────────────┐
+                    │  Check Termination Conditions:      │
+                    │  ├─ Score >= accept_score?          │
+                    │  ├─ N accepted >= max_accepts?      │
+                    │  ├─ i >= max_attempts?              │
+                    │  └─ Cost >= cost_limit?             │
+                    └─────────────────────────────────────┘
+                                         │
+                              ┌──────────┴──────────┐
+                              │                     │
+                        CONTINUE              STOP RETRY
+                              │                     │
+                              └──────────┬──────────┘
+                                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    SELECT BEST ATTEMPT                          │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Find attempt with highest review score                     │
+│  2. Return that attempt's:                                      │
+│     ├─ submission (patch)                                       │
+│     ├─ trajectory                                               │
+│     └─ info                                                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Data Flow
+
+**Inputs:**
+- Problem statement
+- Multiple agent attempts (trajectories)
+- Reviewer configuration (system_template, instance_template)
+
+**Data Passed to Reviewer:**
+- `{{problem_statement}}`: Original issue
+- `{{traj}}`: Formatted trajectory showing agent's actions
+- `{{submission}}`: Git patch from the attempt
+- `{{diff}}`: Git diff of changes
+
+**Reviewer Output:**
+- Numerical score (e.g., 0-100)
+- Textual explanation
+
+**Final Output:**
+- Best attempt (highest score above threshold)
+
