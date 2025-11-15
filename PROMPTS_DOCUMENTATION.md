@@ -557,3 +557,126 @@ You do not need to follow exactly what is done in the demonstration.
 --- END OF DEMONSTRATION ---
 ```
 
+---
+
+## Tool Documentation Prompts
+
+Tool documentation prompts are dynamically generated from tool configuration files and injected into the system prompt via the `{{command_docs}}` variable. Each tool has a signature and docstring that teaches the agent how to use it.
+
+### 4.1 str_replace_editor (Anthropic-Style Editor)
+
+**Location:** `tools/edit_anthropic/config.yaml`
+
+**Purpose:** Advanced file editing tool inspired by Anthropic's computer use demo. Provides view, create, str_replace, insert, and undo operations.
+
+**Usage Context:** Used in default configuration for modern LLMs with function calling capabilities.
+
+**Key Features:**
+- Persistent state across commands
+- Directory listing and file viewing
+- String replacement with exact matching
+- Insert operations at specific lines
+- Undo functionality
+
+**Tool Signature:**
+```
+str_replace_editor <command> <path> [<file_text>] [<view_range>] [<old_str>] [<new_str>] [<insert_line>]
+```
+
+**Tool Documentation:**
+```
+Custom editing tool for viewing, creating and editing files
+* State is persistent across command calls and discussions with the user
+* If `path` is a file, `view` displays the result of applying `cat -n`. If `path` is a directory, `view` lists non-hidden files and directories up to 2 levels deep
+* The `create` command cannot be used if the specified `path` already exists as a file
+* If a `command` generates a long output, it will be truncated and marked with `<response clipped>`
+* The `undo_edit` command will revert the last edit made to the file at `path`
+
+Notes for using the `str_replace` command:
+* The `old_str` parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!
+* If the `old_str` parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in `old_str` to make it unique
+* The `new_str` parameter should contain the edited lines that should replace the `old_str`
+```
+
+### 4.2 Windowed File Navigation Tools
+
+**Location:** `tools/windowed/config.yaml`
+
+**Purpose:** Windowed file viewer that shows a limited number of lines at a time, with navigation commands.
+
+**Usage Context:** Used in coding_challenge.yaml and other windowed editing configurations.
+
+**Tool Signatures and Documentation:**
+
+#### goto
+```
+goto <line_number>
+```
+**Description:** moves the window to show <line_number>
+
+#### open
+```
+open "<path>" [<line_number>]
+```
+**Description:** opens the file at the given path in the editor. If line_number is provided, the window will be move to include that line
+
+#### create
+```
+create <filename>
+```
+**Description:** creates and opens a new file with the given name
+
+#### scroll_up
+```
+scroll_up
+```
+**Description:** moves the window up {WINDOW} lines
+
+#### scroll_down
+```
+scroll_down
+```
+**Description:** moves the window down {WINDOW} lines
+
+### 4.3 Search Tools
+
+**Location:** `tools/search/config.yaml`
+
+**Purpose:** File and directory search tools for finding files and searching content.
+
+**Usage Context:** Used in coding challenges and configurations that need search capabilities.
+
+**Tool Signatures and Documentation:**
+
+#### find_file
+```
+find_file <file_name> [<dir>]
+```
+**Description:** finds all files with the given name or pattern in dir. If dir is not provided, searches in the current directory. Supports shell-style wildcards (e.g. *.py)
+
+#### search_dir
+```
+search_dir <search_term> [<dir>]
+```
+**Description:** searches for search_term in all files in dir. If dir is not provided, searches in the current directory
+
+#### search_file
+```
+search_file <search_term> [<file>]
+```
+**Description:** searches for search_term in file. If file is not provided, searches in the current open file
+
+### 4.4 Submit Tool
+
+**Location:** `tools/submit/config.yaml`
+
+**Purpose:** Allows the agent to submit its solution when complete.
+
+**Usage Context:** Used in all configurations to signal task completion.
+
+**Tool Signature:**
+```
+submit
+```
+**Description:** submits the current file
+
