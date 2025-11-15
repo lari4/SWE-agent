@@ -848,3 +848,215 @@ The last line of your response MUST be "first" or "second".
 - Similar to Chooser but returns multiple indices
 - Used before Chooser to narrow down options
 
+---
+
+## Error & Validation Prompts
+
+These prompts are shown to the agent when errors occur or when the agent's output doesn't meet expected format requirements.
+
+### 6.1 Bash Syntax Error Template
+
+**Location:** `sweagent/agent/agents.py` (TemplateConfig class)
+
+**Purpose:** Informs the agent when a bash command has incorrect syntax.
+
+**Usage Context:** Triggered when the command fails bash syntax validation before execution.
+
+**Default Template:**
+```
+<NOTE>The command you provided has incorrect syntax. Please correct it and try again.</NOTE>
+```
+
+### 6.2 Format Error Messages
+
+**Location:** Throughout codebase, raised by FormatError exceptions
+
+**Purpose:** Generic error messages when the agent's response doesn't match expected format.
+
+**Usage Context:** Used by parsers when they cannot extract thought/action from model response.
+
+---
+
+## Parser & Format Prompts
+
+Parser prompts define the expected output format for the agent and provide error messages when the format is incorrect.
+
+### 7.1 ThoughtActionParser Format
+
+**Location:** `sweagent/tools/parsing.py` (ThoughtActionParser class)
+
+**Purpose:** Expects the agent to provide a discussion followed by a command in backticks.
+
+**Usage Context:** Default parser for many configurations, especially coding_challenge.yaml.
+
+**Expected Format:**
+```
+DISCUSSION
+Discuss here with yourself about what your planning and what you're going to do in this step.
+
+```
+command(s) that you're going to run
+```
+```
+
+**Error Message:**
+```
+Your output was not formatted correctly. You must always include one discussion and one command as part of your response. Make sure you do not have multiple discussion/command tags.
+Please make sure your output precisely matches the following format:
+DISCUSSION
+Discuss here with yourself about what your planning and what you're going to do in this step.
+
+```
+command(s) that you're going to run
+```
+```
+
+### 7.2 XMLThoughtActionParser Format
+
+**Location:** `sweagent/tools/parsing.py` (XMLThoughtActionParser class)
+
+**Purpose:** Expects the agent to provide a discussion followed by a command wrapped in XML `<command>` tags.
+
+**Usage Context:** Used in some configurations that prefer XML-style formatting.
+
+**Expected Format:**
+```
+Discussion text here
+<command>
+ls -l
+</command>
+```
+
+**Error Message:**
+```
+Your output was not formatted correctly. You must always include one discussion and one command as part of your response. Make sure you do not have multiple discussion/command tags.
+Please make sure your output precisely matches the following format:
+```
+
+### 7.3 XMLFunctionCallingParser Format
+
+**Location:** `sweagent/tools/parsing.py` (XMLFunctionCallingParser class)
+
+**Purpose:** Expects function/tool calls in XML format with parameters.
+
+**Usage Context:** Used for structured tool calling with multiple parameters.
+
+**Expected Format:**
+```
+Discussion text here
+<function=bash>
+<parameter=command>find /testbed -type f -name "_discovery.py"</parameter>
+</function>
+```
+
+**Error Messages:**
+
+When no function is found:
+```
+Your last output did not use any tool calls!
+Please make sure your output includes exactly _ONE_ function call!
+If you think you have already resolved the issue, please submit your changes by running the `submit` command.
+If you think you cannot solve the problem, please run `submit`.
+Else, please continue with a new tool call!
+```
+
+When multiple functions are found:
+```
+Your last output included multiple tool calls!
+Please make sure your output includes a thought and exactly _ONE_ function call.
+```
+
+When unexpected arguments are present:
+```
+Your action could not be parsed properly: {{exception_message}}.
+Make sure your function call doesn't include any extra arguments that are not in the allowed arguments, and only use the allowed commands.
+```
+
+### 7.4 ActionParser Format
+
+**Location:** `sweagent/tools/parsing.py` (ActionParser class)
+
+**Purpose:** Expects only a command name, no thought or discussion.
+
+**Usage Context:** Minimal parser for simple command-only responses.
+
+**Expected Format:**
+```
+ls -l
+```
+
+**Error Message:**
+```
+The command you provided was not recognized. Please specify one of the commands (+ any necessary arguments) from the following list in your response. Do not include any other text.
+
+COMMANDS:
+{command_docs}
+```
+
+### 7.5 EditFormat Parser
+
+**Location:** `sweagent/tools/parsing.py` (EditFormat class)
+
+**Purpose:** Specialized parser for file editing that expects replacement text in backticks.
+
+**Usage Context:** Used with windowed editing tools that replace entire window contents.
+
+**Expected Format:**
+```
+Comments about what you're going to do
+
+```
+New window contents.
+Make sure you copy the entire contents of the window here, with the required indentation.
+```
+```
+
+**Error Message:**
+```
+Your output was not formatted correctly. You must wrap the replacement text in backticks (```).
+Please make sure your output precisely matches the following format:
+COMMENTS
+You can write comments here about what you're going to do if you want.
+
+```
+New window contents.
+Make sure you copy the entire contents of the window here, with the required indentation.
+Make the changes to the window above directly in this window.
+Remember that all of the window's contents will be replaced with the contents of this window.
+Don't include line numbers in your response.
+```
+```
+
+### 7.6 FunctionCallingParser Format
+
+**Location:** `sweagent/tools/parsing.py` (FunctionCallingParser class)
+
+**Purpose:** Native function calling format for models that support tool use API.
+
+**Usage Context:** Default for modern LLMs (GPT-4, Claude 3.5+) that support native function calling.
+
+**Expected Format:**
+Uses the model's native function calling API format (JSON-based tool calls).
+
+**Key Features:**
+- No need for `{{command_docs}}` in system prompt
+- Automatic tool schema generation
+- Structured parameter validation
+- Native model support for tool calling
+
+---
+
+## Summary
+
+This documentation covers all major AI prompts used in SWE-agent across seven categories:
+
+1. **System Prompts**: Define agent role and capabilities
+2. **Instance/Task Prompts**: Provide specific problem context
+3. **Observation & Feedback Prompts**: Format command output and feedback
+4. **Tool Documentation Prompts**: Teach agent how to use available tools
+5. **Review & Retry Loop Prompts**: Enable multi-attempt problem solving
+6. **Error & Validation Prompts**: Handle errors and edge cases
+7. **Parser & Format Prompts**: Enforce output structure
+
+These prompts work together to create a comprehensive autonomous coding agent system that can understand problems, use tools, handle errors, and iterate toward solutions.
+
