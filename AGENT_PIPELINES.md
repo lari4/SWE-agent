@@ -523,3 +523,317 @@ Samples multiple actions and creates a "colleague discussion" to synthesize them
 - Step 3: Agent synthesizes and selects best action
 - Output: Final thought-action pair
 
+### 3.3 Binary Trajectory Comparison Pipeline
+
+Uses tournament-style pairwise comparisons to select the best action from multiple candidates.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│      BINARY_TRAJECTORY_COMPARISON.GET_ACTION()                  │
+├─────────────────────────────────────────────────────────────────┤
+│  Configuration:                                                 │
+│  ├─ min_n_samples: Minimum candidates (default: 4)              │
+│  ├─ max_n_samples: Maximum candidates (default: 10)             │
+│  └─ comparison_temperature: LLM temperature for comparisons     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Generate N Candidate Actions           │
+        │  └─ MODEL.QUERY(messages, n=N)          │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Parse All Candidates:                  │
+        │  └─ Extract thought_i, action_i for all │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   TOURNAMENT ELIMINATION                        │
+│                  (Pairwise Comparisons)                         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Round 1: Compare pairs                 │
+        │  for each pair (i, j):                  │
+        │     ├─ Format comparison prompt         │
+        │     ├─ Query comparison LLM             │
+        │     └─ Parse winner (first/second)      │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Collect Winners from Round 1           │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Round 2: Compare winners               │
+        │  └─ Repeat pairwise comparisons         │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Continue Until Single Winner           │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return Best Action                     │
+        └─────────────────────────────────────────┘
+```
+
+**Comparison Prompt Format:**
+Each comparison uses:
+- System: "You are an expert software engineer overseeing junior developers..."
+- Instance: Problem statement + trajectory so far
+- Comparison: Two candidate thought-action pairs to compare
+- Response: Must end with "first" or "second"
+
+**Data Flow:**
+- Input: N candidate actions
+- Process: log₂(N) rounds of pairwise elimination
+- Output: Single best action
+
+---
+
+## Tool Execution Pipeline
+
+Shows how tools are executed and how their output is captured and formatted.
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  TOOLS.EXECUTE(action_string)                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Parse Action String:                   │
+        │  ├─ Extract command name                │
+        │  └─ Extract arguments                   │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Identify Tool:                         │
+        │  └─ Match to registered tool/command    │
+        └─────────────────────────────────────────┘
+                              │
+                    ┌─────────┴──────────┐
+                    │                    │
+             Special Command          Bash Command
+                    │                    │
+                    ▼                    ▼
+    ┌───────────────────────┐  ┌──────────────────────┐
+    │  Special Tool Handler │  │  Execute in Shell    │
+    │  (e.g., str_replace_  │  │  ├─ Send to SWEEnv   │
+    │  editor, goto, etc.)  │  │  ├─ Capture stdout   │
+    │  └─ Custom logic      │  │  ├─ Capture stderr   │
+    └───────────────────────┘  │  └─ Get exit code    │
+                    │          └──────────────────────┘
+                    │                    │
+                    └─────────┬──────────┘
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Capture Output:                        │
+        │  ├─ stdout/stderr text                  │
+        │  ├─ exit_code                           │
+        │  ├─ execution_time                      │
+        │  └─ special outputs (diff, state, etc)  │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Format Observation:                    │
+        │  └─ Apply next_step_template            │
+        │      ├─ If empty: no_output_template    │
+        │      ├─ If truncated: truncated_template│
+        │      └─ If timeout: timeout_template    │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Update State:                          │
+        │  ├─ CURRENT_FILE (if file opened)       │
+        │  ├─ CURRENT_LINE (if navigated)         │
+        │  └─ Other tool-specific state           │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return Observation String              │
+        └─────────────────────────────────────────┘
+```
+
+**Special Commands:**
+- `submit`: Creates git patch and signals completion
+- `str_replace_editor`: Edits files with exact string matching
+- `goto`: Moves file viewing window
+- `open`: Opens file in windowed editor
+- `search_file`, `search_dir`, `find_file`: Search operations
+
+**Data Flow:**
+- Input: Action string (e.g., "bash ls -la")
+- Process: Parse → Execute → Capture → Format
+- Output: Observation string for agent
+
+---
+
+## History Processing Pipeline
+
+Shows how message history is processed before being sent to the LLM.
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AGENT.MESSAGES (property)                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Filter by Agent Name:                  │
+        │  └─ Keep only current agent's messages  │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Apply History Processors (chain):      │
+        │  for processor in processors:           │
+        │     └─ messages = processor(messages)   │
+        └─────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              COMMON HISTORY PROCESSORS                          │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  1. LastNObservations Processor                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  Purpose: Keep only last N user messages (observations)         │
+│  ├─ Keep all system/assistant messages                          │
+│  ├─ Keep only last N user messages                              │
+│  └─ Prevents context from growing too large                     │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  2. CacheControl Processor                                      │
+├─────────────────────────────────────────────────────────────────┤
+│  Purpose: Add cache control markers for Anthropic prompt cache  │
+│  ├─ Mark last N messages as ephemeral cache                     │
+│  └─ Reduces API costs by caching recent context                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  3. Default History Processor                                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Purpose: Standard pass-through (no modifications)              │
+│  └─ Returns messages unchanged                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+        ┌─────────────────────────────────────────┐
+        │  Return Processed Messages              │
+        │  └─ Ready to send to LLM                │
+        └─────────────────────────────────────────┘
+```
+
+**Typical Message History Structure:**
+```
+[
+  {"role": "system", "content": "System prompt..."},
+  {"role": "user", "content": "Instance prompt..."},
+  {"role": "assistant", "content": "Thought + Action"},
+  {"role": "user", "content": "Observation"},
+  {"role": "assistant", "content": "Thought + Action"},
+  {"role": "user", "content": "Observation"},
+  ...
+]
+```
+
+---
+
+## Summary: Complete End-to-End Flow
+
+Here's how all pipelines connect in a typical SWE-agent run:
+
+```
+1. MAIN PIPELINE (run)
+   ├─ Setup Phase
+   │  ├─ Install tools
+   │  ├─ Add system message
+   │  └─ Add instance message
+   │
+   └─ Main Loop (until done)
+      │
+      ├─ STEP
+      │  │
+      │  ├─ FORWARD_WITH_HANDLING
+      │  │  │
+      │  │  ├─ HISTORY PROCESSING
+      │  │  │  └─ Filter and cache messages
+      │  │  │
+      │  │  ├─ ACTION SAMPLING (optional)
+      │  │  │  ├─ Ask Colleagues, OR
+      │  │  │  └─ Binary Comparison
+      │  │  │
+      │  │  ├─ MODEL QUERY
+      │  │  │  └─ Get thought + action
+      │  │  │
+      │  │  ├─ PARSER
+      │  │  │  └─ Extract thought/action
+      │  │  │
+      │  │  └─ TOOL EXECUTION
+      │  │     └─ Execute and get observation
+      │  │
+      │  ├─ Update history
+      │  ├─ Update trajectory
+      │  └─ Update info
+      │
+      └─ If submitted:
+         │
+         └─ RETRY LOOP (optional)
+            │
+            ├─ REVIEWER (Score-based)
+            │  ├─ Format trajectory
+            │  ├─ Query reviewer LLM
+            │  └─ Get score
+            │
+            ├─ CHOOSER (Comparison-based)
+            │  ├─ Format all submissions
+            │  ├─ Preselector (if >2)
+            │  ├─ Query chooser LLM
+            │  └─ Get best index
+            │
+            └─ Select best attempt
+```
+
+**Key Data Structures:**
+
+- **Trajectory**: List of steps, each containing:
+  - action (string)
+  - observation (string)
+  - thought (string)
+  - state (dict)
+  - execution_time (float)
+
+- **Info**: Dictionary containing:
+  - submission (git patch string)
+  - exit_status (submitted/error/etc)
+  - model_stats (cost, tokens, etc)
+  - edited_files (list of modified files)
+  - review (score/reasoning if reviewed)
+
+- **Messages**: List of chat messages:
+  - role (system/user/assistant)
+  - content (string or structured)
+  - metadata (agent name, message type, etc)
+
+This comprehensive pipeline system allows SWE-agent to solve complex software engineering tasks through iterative action-observation loops with multiple retry strategies and sophisticated action selection mechanisms.
+
